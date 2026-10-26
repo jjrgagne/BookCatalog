@@ -12,3 +12,6 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+# Shared non-secret test key (see app/build.gradle.kts); the release key is
+# never committed.
+!app/debug.keystore
