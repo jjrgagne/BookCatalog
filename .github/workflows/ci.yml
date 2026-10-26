@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Flutter project
+        id: detect
+        run: |
+          if [ -f pubspec.yaml ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; echo "No pubspec.yaml yet - skipping Flutter steps."; fi
+
+      - uses: actions/setup-java@v4
+        if: steps.detect.outputs.present == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        if: steps.detect.outputs.present == 'true'
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+
+      - name: Install dependencies
+        if: steps.detect.outputs.present == 'true'
+        run: flutter pub get
+
+      - name: Check formatting
+        if: steps.detect.outputs.present == 'true'
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze
+        if: steps.detect.outputs.present == 'true'
+        run: flutter analyze
+
+      - name: Test
+        if: steps.detect.outputs.present == 'true'
+        run: flutter test
+
+      - name: Build debug APK
+        if: steps.detect.outputs.present == 'true'
+        run: flutter build apk --debug
+
+      - uses: actions/upload-artifact@v4
+        if: steps.detect.outputs.present == 'true'
+        with:
+          name: bookcatalog-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 14
