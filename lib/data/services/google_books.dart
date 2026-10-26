@@ -16,9 +16,18 @@ class GoogleBooksClient {
 
   final http.Client _http;
 
+  /// Looks up by ISBN-13, then by ISBN-10 (some older books are only
+  /// indexed under their ISBN-10).
   Future<BookMetadata?> lookup(String isbn13) async {
+    final result = await _query(isbn13, isbn13);
+    if (result != null) return result;
+    final isbn10 = toIsbn10(isbn13);
+    return isbn10 == null ? null : _query(isbn13, isbn10);
+  }
+
+  Future<BookMetadata?> _query(String isbn13, String isbn) async {
     final uri = Uri.https('www.googleapis.com', '/books/v1/volumes', {
-      'q': 'isbn:$isbn13',
+      'q': 'isbn:$isbn',
       if (_apiKey.isNotEmpty) 'key': _apiKey,
     });
     final response = await _http.get(uri).timeout(const Duration(seconds: 10));

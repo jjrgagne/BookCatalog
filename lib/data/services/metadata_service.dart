@@ -1,6 +1,7 @@
 import 'package:http/http.dart' as http;
 
 import '../models/book_metadata.dart';
+import 'backup_sources.dart';
 import 'google_books.dart';
 import 'open_library.dart';
 
@@ -13,38 +14,56 @@ class LookupUnavailableException implements Exception {
   String toString() => 'Book lookup unavailable: $cause';
 }
 
-/// Looks up a book on Open Library first, then fills gaps from Google Books.
+typedef LookupSource = Future<BookMetadata?> Function(String isbn13);
+
+/// Looks a book up in several free sources, in order, until the details are
+/// complete: Open Library, Google Books (ISBN-13 then ISBN-10), Open
+/// Library's search index, then Crossref. Later sources only fill gaps.
 class MetadataService {
   MetadataService({http.Client? client})
-    : this.withClients(
-        OpenLibraryClient(client ?? http.Client()),
-        GoogleBooksClient(client ?? http.Client()),
-      );
+    : this.withSources(_defaultSources(client ?? http.Client()));
 
-  MetadataService.withClients(this._openLibrary, this._googleBooks);
+  MetadataService.withSources(this._sources);
 
-  final OpenLibraryClient _openLibrary;
-  final GoogleBooksClient _googleBooks;
+  static List<LookupSource> _defaultSources(http.Client client) => [
+    OpenLibraryClient(client).lookup,
+    GoogleBooksClient(client).lookup,
+    OpenLibrarySearchClient(client).lookup,
+    CrossrefClient(client).lookup,
+  ];
 
-  /// Returns merged metadata, or null if neither service knows the book.
-  /// Throws [LookupUnavailableException] if both services failed to respond.
+  final List<LookupSource> _sources;
+
+  /// Returns merged metadata, or null if no source knows the book.
+  /// Throws [LookupUnavailableException] if every source failed to respond.
   Future<BookMetadata?> lookup(String isbn13) async {
-    Object? olError;
-    BookMetadata? ol;
-    try {
-      ol = await _openLibrary.lookup(isbn13);
-    } catch (e) {
-      olError = e;
+    BookMetadata? result;
+    Object? lastError;
+    var failures = 0;
+    for (final source in _sources) {
+      try {
+        final found = await source(isbn13);
+        result = result == null ? found : result.mergedWith(found);
+      } catch (e) {
+        failures++;
+        lastError = e;
+      }
+      if (result != null && result.isComplete) break;
     }
-    if (ol != null && ol.isComplete) return ol;
-
-    BookMetadata? gb;
-    try {
-      gb = await _googleBooks.lookup(isbn13);
-    } catch (e) {
-      if (olError != null) throw LookupUnavailableException(e);
+    if (result == null && failures == _sources.length) {
+      throw LookupUnavailableException(lastError!);
     }
-    if (ol != null) return ol.mergedWith(gb);
-    return gb;
+    // Many books without a cover in the metadata still have one here.
+    if (result != null && result.coverUrl == null) {
+      result = result.mergedWith(
+        BookMetadata(
+          isbn13: isbn13,
+          title: '',
+          source: result.source,
+          coverUrl: openLibraryCoverByIsbn(isbn13),
+        ),
+      );
+    }
+    return result;
   }
 }

@@ -134,10 +134,20 @@ class _ScanResultSheetState extends ConsumerState<_ScanResultSheet> {
           ),
         ],
       ),
-      _Status.notFound => const ListTile(
-        leading: Icon(Icons.search_off),
-        title: Text('No details found online'),
-        subtitle: Text('You can type them in, or save with just the ISBN.'),
+      _Status.notFound => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.search_off),
+            title: Text('Not found in any book database'),
+            subtitle: Text(
+              'Look it up on the web and type the details in, or save with '
+              'just the ISBN.',
+            ),
+          ),
+          WebSearchButtons(isbn13: widget.isbn13),
+        ],
       ),
       _Status.offline => ListTile(
         leading: const Icon(Icons.cloud_off),

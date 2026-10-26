@@ -4,6 +4,7 @@ import 'ids.dart';
 enum MetadataSource {
   openlibrary,
   google,
+  crossref,
   manual,
 
   /// Saved from a scan whose lookup hasn't completed yet (e.g. offline).

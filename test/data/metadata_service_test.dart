@@ -106,6 +106,100 @@ void main() {
     expect(await serviceWith({}, {'totalItems': 0}).lookup(isbn), isNull);
   });
 
+  group('backup sources', () {
+    /// Routes requests by host/path to canned JSON; records what was asked.
+    MetadataService routed(
+      Map<String, Object> Function(Uri) respond,
+      List<Uri> calls,
+    ) {
+      final client = MockClient((request) async {
+        calls.add(request.url);
+        return http.Response(jsonEncode(respond(request.url)), 200);
+      });
+      return MetadataService(client: client);
+    }
+
+    test('Google Books is retried with the ISBN-10', () async {
+      final calls = <Uri>[];
+      final result = await routed((u) {
+        if (u.host == 'www.googleapis.com' &&
+            u.queryParameters['q'] == 'isbn:0306406152') {
+          return googleBooks;
+        }
+        return {};
+      }, calls).lookup(isbn);
+      expect(result!.title, 'Test-Driven Development');
+      expect(calls.where((u) => u.host == 'www.googleapis.com').length, 2);
+    });
+
+    test('Open Library search index is used next', () async {
+      final result = await routed((u) {
+        if (u.path == '/search.json') {
+          return {
+            'numFound': 1,
+            'docs': [
+              {
+                'title': 'Old Book',
+                'author_name': ['A. Writer'],
+                'publisher': ['Small Press'],
+                'first_publish_year': 1971,
+                'cover_i': 42,
+              },
+            ],
+          };
+        }
+        return {};
+      }, []).lookup(isbn);
+      expect(result!.title, 'Old Book');
+      expect(result.authors, ['A. Writer']);
+      expect(result.publishedYear, 1971);
+      expect(result.coverUrl, 'https://covers.openlibrary.org/b/id/42-M.jpg');
+    });
+
+    test('Crossref is the last resort', () async {
+      final result = await routed((u) {
+        if (u.host == 'api.crossref.org') {
+          return {
+            'message': {
+              'items': [
+                {
+                  'title': ['Handbook of Things'],
+                  'author': [
+                    {'given': 'Ada', 'family': 'Lovelace'},
+                  ],
+                  'publisher': 'Springer',
+                  'published-print': {
+                    'date-parts': [
+                      [2015, 3],
+                    ],
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return {};
+      }, []).lookup(isbn);
+      expect(result!.title, 'Handbook of Things');
+      expect(result.authors, ['Ada Lovelace']);
+      expect(result.publishedYear, 2015);
+      expect(result.source, MetadataSource.crossref);
+      // No cover from Crossref: falls back to Open Library's cover-by-ISBN.
+      expect(result.coverUrl, contains('/b/isbn/$isbn-M.jpg'));
+    });
+
+    test('stops once details are complete', () async {
+      final calls = <Uri>[];
+      await routed(
+        (u) => u.host == 'openlibrary.org' && u.path == '/api/books'
+            ? openLibraryFull
+            : {},
+        calls,
+      ).lookup(isbn);
+      expect(calls.length, 1);
+    });
+  });
+
   test('throws LookupUnavailableException when offline', () async {
     expect(
       serviceWith(null, null, fail: true).lookup(isbn),

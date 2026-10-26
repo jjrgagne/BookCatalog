@@ -271,6 +271,13 @@ class BookDetailScreen extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 16),
+          // Details typed in or never found: offer web searches by ISBN.
+          if (book.isbn13 != null &&
+              (book.metadataSource == MetadataSource.manual ||
+                  book.metadataSource == MetadataSource.pending)) ...[
+            WebSearchButtons(isbn13: book.isbn13!),
+            const SizedBox(height: 8),
+          ],
           if (book.isbn13 != null)
             Text('ISBN-13: ${book.isbn13}', style: theme.textTheme.bodySmall),
           if (book.isbn10 != null)
@@ -289,6 +296,7 @@ class BookDetailScreen extends ConsumerWidget {
 String _sourceName(MetadataSource s) => switch (s) {
   MetadataSource.openlibrary => 'Open Library',
   MetadataSource.google => 'Google Books',
+  MetadataSource.crossref => 'Crossref',
   MetadataSource.manual => 'manual entry',
   MetadataSource.pending => 'pending lookup',
 };

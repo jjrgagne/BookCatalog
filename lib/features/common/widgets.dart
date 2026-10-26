@@ -1,11 +1,13 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/providers.dart';
 import '../../data/models/ids.dart';
 import '../../data/models/location.dart';
 import '../../data/models/tag.dart';
+import '../../data/services/backup_sources.dart';
 
 /// A book cover from its URL, with a placeholder when missing or offline.
 class BookCover extends StatelessWidget {
@@ -372,6 +374,30 @@ Future<Set<String>?> pickTags(
         );
       },
     ),
+  );
+}
+
+/// "Search Amazon / AbeBooks / Google" buttons for books no source knows.
+/// They open in the phone's browser; details can then be typed in.
+class WebSearchButtons extends StatelessWidget {
+  const WebSearchButtons({super.key, required this.isbn13});
+
+  final String isbn13;
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 8,
+    crossAxisAlignment: WrapCrossAlignment.center,
+    children: [
+      Text('Search:', style: Theme.of(context).textTheme.labelLarge),
+      for (final s in webSearchesFor(isbn13))
+        ActionChip(
+          avatar: const Icon(Icons.open_in_new, size: 16),
+          label: Text(s.label),
+          onPressed: () =>
+              launchUrl(s.url, mode: LaunchMode.externalApplication),
+        ),
+    ],
   );
 }
 
