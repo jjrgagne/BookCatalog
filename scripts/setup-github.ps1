@@ -157,7 +157,8 @@ Client-side search over the cached catalog (Firestore has no full-text search).
 - [ ] Location model with `kind`: `room` | `person`
 - [ ] Locations screen with two sections (Rooms, On loan to); add/rename/reorder/delete (delete only when empty or after moving books)
 - [ ] "Move to..." on book detail, and bulk move from a multi-select in the library
-- [ ] Decide: store `previousLocationId` for a one-tap "Return" from a person to their room?
+- [ ] Moving a book from a room to a person stores the room in `previousLocationId`
+- [ ] One-tap **Return** button (book detail and "On loan" list) moves it back to that room and clears the field; falls back to a room picker if that room was deleted
 '@ }
     @{ m = 4; labels = 'locations-tags'; title = 'Tags: manage and assign'; body = @'
 - [ ] Tags screen: add/rename/recolor/delete

@@ -70,6 +70,7 @@ households/{householdId}
     isbn13, isbn10, title, subtitle, authors[], publisher,
     publishedYear, coverUrl,
     locationId, tagIds[], copies,
+    previousLocationId   room it was in before being lent (for one-tap Return)
     notes                free text
     metadataSource       openlibrary | google | manual
     addedBy, addedAt, updatedAt
@@ -81,8 +82,9 @@ Notes:
   kept when the book has one.
 - Search is done client-side over the cached catalog (Firestore has no full-text
   search, and a household catalog of a few thousand books is small enough).
-- Open question: add `previousLocationId` so a book on loan can be returned to its
-  room in one tap?
+- Moving a book from a room to a person records the room in
+  `previousLocationId`; a **Return** button on books that are on loan moves them
+  back to that room in one tap and clears the field.
 
 ## Scanning flow
 
@@ -102,7 +104,8 @@ Notes:
 
 - **Library** — grid/list, search (title/author/ISBN), filter by location and tag.
 - **Scan** — barcode/OCR toggle, current-location picker.
-- **Book detail / edit** — all fields including notes; move to another location.
+- **Book detail / edit** — all fields including notes; move to another location;
+  **Return** when on loan.
 - **Locations** — rooms and people, in two sections.
 - **Tags**.
 - **Household** — members, invite code / QR, CSV export, sign out.
