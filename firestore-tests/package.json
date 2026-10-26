@@ -1,0 +1,9 @@
+{
+  "name": "bookcatalog-firestore-rules-tests",
+  "private": true,
+  "type": "module",
+  "description": "Security rules tests; run via the Firestore emulator (see README).",
+  "scripts": {
+    "test": "node --test"
+  }
+}

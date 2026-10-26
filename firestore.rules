@@ -1,0 +1,119 @@
+rules_version = '2';
+
+// Data layout:
+//   users/{uid}                     { householdId }
+//   invites/{code}                  { householdId }
+//   households/{hid}                { name, inviteCode, ownerUid, createdAt }
+//   households/{hid}/members/{uid}  { displayName, email, role, inviteCode, joinedAt }
+//   households/{hid}/books/{id}
+//   households/{hid}/locations/{id}
+//   households/{hid}/tags/{id}
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function householdPath(hid) {
+      return /databases/$(database)/documents/households/$(hid);
+    }
+
+    function isMember(hid) {
+      return signedIn() && exists(
+        /databases/$(database)/documents/households/$(hid)/members/$(request.auth.uid));
+    }
+
+    function isOwner(hid) {
+      return signedIn() && get(householdPath(hid)).data.ownerUid == request.auth.uid;
+    }
+
+    // Owner check that also sees writes in the same batch (household creation).
+    function isOwnerAfter(hid) {
+      return signedIn() && getAfter(householdPath(hid)).data.ownerUid == request.auth.uid;
+    }
+
+    function optionalString(data, field, max) {
+      return !(field in data) || data[field] == null
+        || (data[field] is string && data[field].size() <= max);
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      // A user may only point at a household they are (or are becoming) a member of.
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['householdId'])
+        && (request.resource.data.householdId == null
+            || existsAfter(/databases/$(database)/documents/households/$(request.resource.data.householdId)/members/$(uid)));
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /invites/{code} {
+      // Codes are looked up one at a time; they cannot be listed.
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if isOwnerAfter(request.resource.data.householdId)
+        && getAfter(householdPath(request.resource.data.householdId)).data.inviteCode == code;
+      allow delete: if isOwner(resource.data.householdId);
+      allow update: if false;
+    }
+
+    match /households/{hid} {
+      allow read: if isMember(hid);
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 100
+        && request.resource.data.inviteCode is string;
+      // Owner may rename or change the invite code, but not hand over ownership.
+      allow update: if isOwner(hid)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 100;
+      allow delete: if false;
+
+      match /members/{uid} {
+        allow read: if isMember(hid);
+        allow create: if signedIn() && request.auth.uid == uid && (
+          // The owner adding themselves while creating the household.
+          (request.resource.data.role == 'owner' && isOwnerAfter(hid))
+          // Anyone else joining with the current invite code.
+          || (request.resource.data.role == 'member'
+              && request.resource.data.inviteCode == get(householdPath(hid)).data.inviteCode)
+        );
+        // Members may update their own name but not their role.
+        allow update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.role == resource.data.role;
+        // Owner removes others; anyone may leave (the owner may not leave).
+        allow delete: if (isOwner(hid) && uid != request.auth.uid)
+          || (signedIn() && request.auth.uid == uid && !isOwner(hid));
+      }
+
+      match /books/{id} {
+        allow read, delete: if isMember(hid);
+        allow create, update: if isMember(hid)
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.title.size() <= 500
+          && optionalString(request.resource.data, 'notes', 20000)
+          && optionalString(request.resource.data, 'isbn13', 13)
+          && (!('tagIds' in request.resource.data) || request.resource.data.tagIds is list);
+      }
+
+      match /locations/{id} {
+        allow read, delete: if isMember(hid);
+        allow create, update: if isMember(hid)
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 100
+          && request.resource.data.kind in ['room', 'person'];
+      }
+
+      match /tags/{id} {
+        allow read, delete: if isMember(hid);
+        allow create, update: if isMember(hid)
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 100;
+      }
+    }
+  }
+}

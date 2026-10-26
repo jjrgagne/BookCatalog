@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Open book with a barcode on the right page. Drawn inside the adaptive-icon
+     safe zone (the central 66dp of 108dp). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Pages -->
+    <path
+        android:fillColor="#FFF8E1"
+        android:pathData="M54,40 C46,35 37,34 28,36 L28,72 C37,70 46,71 54,76 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,40 C62,35 71,34 80,36 L80,72 C71,70 62,71 54,76 Z" />
+    <!-- Text lines on the left page -->
+    <path
+        android:fillColor="#A1887F"
+        android:pathData="M33,46h16v2.4h-16z M33,52h16v2.4h-16z M33,58h16v2.4h-16z M33,64h11v2.4h-11z" />
+    <!-- Barcode on the right page -->
+    <path
+        android:fillColor="#4E342E"
+        android:pathData="M59,46h1.6v18h-1.6z M62,46h3v18h-3z M66.4,46h1.2v18h-1.2z M69,46h2.4v18h-2.4z M72.6,46h1.2v18h-1.2z M75,46h2.2v18h-2.2z" />
+</vector>
