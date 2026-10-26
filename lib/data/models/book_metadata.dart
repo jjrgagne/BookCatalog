@@ -40,11 +40,21 @@ class BookMetadata {
     );
   }
 
-  bool get isComplete =>
-      title.isNotEmpty &&
-      authors.isNotEmpty &&
-      coverUrl != null &&
-      publishedYear != null;
+  BookMetadata withCover(String? url) => BookMetadata(
+    isbn13: isbn13,
+    isbn10: isbn10,
+    title: title,
+    subtitle: subtitle,
+    authors: authors,
+    publisher: publisher,
+    publishedYear: publishedYear,
+    coverUrl: url,
+    source: source,
+  );
+
+  /// Whether the text details are complete (covers are chosen separately).
+  bool get hasFullDetails =>
+      title.isNotEmpty && authors.isNotEmpty && publishedYear != null;
 }
 
 /// Extracts a 4-digit year from strings like "March 1999" or "1999-03-01".

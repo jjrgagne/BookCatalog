@@ -67,7 +67,7 @@ MetadataService serviceWith(
     final body = request.url.host == 'openlibrary.org' ? openLibrary : google;
     return http.Response(jsonEncode(body ?? {}), 200);
   });
-  return MetadataService(client: client);
+  return MetadataService(client: client, coverCheck: (_) async => true);
 }
 
 void main() {
@@ -116,7 +116,7 @@ void main() {
         calls.add(request.url);
         return http.Response(jsonEncode(respond(request.url)), 200);
       });
-      return MetadataService(client: client);
+      return MetadataService(client: client, coverCheck: (_) async => true);
     }
 
     test('Google Books is retried with the ISBN-10', () async {
@@ -197,6 +197,44 @@ void main() {
         calls,
       ).lookup(isbn);
       expect(calls.length, 1);
+    });
+  });
+
+  group('covers are chosen separately from details', () {
+    MetadataService withCovers(Set<String> working) {
+      final client = MockClient((request) async {
+        final body = request.url.host == 'openlibrary.org'
+            ? (request.url.path == '/api/books' ? openLibraryFull : {})
+            : googleBooks;
+        return http.Response(jsonEncode(body), 200);
+      });
+      return MetadataService(
+        client: client,
+        coverCheck: (url) async => working.contains(url),
+      );
+    }
+
+    test('details from Open Library, cover from Google Books', () async {
+      // Open Library's cover link is broken; Google's works.
+      final result = await withCovers({'https://books.google.com/x.jpg'})
+          .lookup(isbn);
+      expect(result!.title, 'Test Driven Development');
+      expect(result.publisher, 'Addison-Wesley');
+      expect(result.source, MetadataSource.openlibrary);
+      expect(result.coverUrl, 'https://books.google.com/x.jpg');
+    });
+
+    test('falls back to Open Library cover-by-ISBN', () async {
+      final byIsbn =
+          'https://covers.openlibrary.org/b/isbn/$isbn-M.jpg?default=false';
+      final result = await withCovers({byIsbn}).lookup(isbn);
+      expect(result!.coverUrl, byIsbn);
+    });
+
+    test('no working cover anywhere gives no cover', () async {
+      final result = await withCovers({}).lookup(isbn);
+      expect(result!.title, 'Test Driven Development');
+      expect(result.coverUrl, isNull);
     });
   });
 

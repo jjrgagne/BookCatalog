@@ -16,14 +16,25 @@ class LookupUnavailableException implements Exception {
 
 typedef LookupSource = Future<BookMetadata?> Function(String isbn13);
 
-/// Looks a book up in several free sources, in order, until the details are
-/// complete: Open Library, Google Books (ISBN-13 then ISBN-10), Open
-/// Library's search index, then Crossref. Later sources only fill gaps.
-class MetadataService {
-  MetadataService({http.Client? client})
-    : this.withSources(_defaultSources(client ?? http.Client()));
+/// Checks that a cover URL really serves an image.
+typedef CoverCheck = Future<bool> Function(String url);
 
-  MetadataService.withSources(this._sources);
+/// Looks a book up in several free sources, in order: Open Library, Google
+/// Books (ISBN-13 then ISBN-10), Open Library's search index, then Crossref.
+///
+/// Text details and the cover are chosen independently: details come from
+/// the first source that has them (later sources fill gaps), while the cover
+/// is the first candidate from *any* source that actually loads, with Open
+/// Library's cover-by-ISBN as the last resort. So a book can get its details
+/// from Open Library and its cover from Google Books.
+class MetadataService {
+  MetadataService({http.Client? client, CoverCheck? coverCheck})
+    : this.withSources(
+        _defaultSources(client ?? http.Client()),
+        coverCheck: coverCheck ?? _httpCoverCheck(client ?? http.Client()),
+      );
+
+  MetadataService.withSources(this._sources, {required this.coverCheck});
 
   static List<LookupSource> _defaultSources(http.Client client) => [
     OpenLibraryClient(client).lookup,
@@ -32,38 +43,58 @@ class MetadataService {
     CrossrefClient(client).lookup,
   ];
 
+  /// An image is "real" if it returns 200 with an image type and isn't a
+  /// tiny placeholder (some services return a 1×1 pixel for missing covers).
+  static CoverCheck _httpCoverCheck(http.Client client) => (url) async {
+    try {
+      final r = await client
+          .get(Uri.parse(url), headers: {'User-Agent': userAgent})
+          .timeout(const Duration(seconds: 8));
+      final type = r.headers['content-type'] ?? '';
+      return r.statusCode == 200 &&
+          type.startsWith('image/') &&
+          r.bodyBytes.length > 1000;
+    } catch (_) {
+      return false;
+    }
+  };
+
   final List<LookupSource> _sources;
+  final CoverCheck coverCheck;
 
   /// Returns merged metadata, or null if no source knows the book.
   /// Throws [LookupUnavailableException] if every source failed to respond.
   Future<BookMetadata?> lookup(String isbn13) async {
-    BookMetadata? result;
+    BookMetadata? details;
+    String? cover;
+    final tried = <String>{};
     Object? lastError;
     var failures = 0;
+
+    Future<void> considerCover(String? url) async {
+      if (cover != null || url == null || !tried.add(url)) return;
+      if (await coverCheck(url)) cover = url;
+    }
+
     for (final source in _sources) {
       try {
         final found = await source(isbn13);
-        result = result == null ? found : result.mergedWith(found);
+        details = details == null ? found : details.mergedWith(found);
+        await considerCover(found?.coverUrl);
       } catch (e) {
         failures++;
         lastError = e;
       }
-      if (result != null && result.isComplete) break;
+      if (details != null && details.hasFullDetails && cover != null) break;
     }
-    if (result == null && failures == _sources.length) {
-      throw LookupUnavailableException(lastError!);
+
+    if (details == null) {
+      if (failures == _sources.length) {
+        throw LookupUnavailableException(lastError!);
+      }
+      return null;
     }
-    // Many books without a cover in the metadata still have one here.
-    if (result != null && result.coverUrl == null) {
-      result = result.mergedWith(
-        BookMetadata(
-          isbn13: isbn13,
-          title: '',
-          source: result.source,
-          coverUrl: openLibraryCoverByIsbn(isbn13),
-        ),
-      );
-    }
-    return result;
+    await considerCover(openLibraryCoverByIsbn(isbn13));
+    return details.withCover(cover);
   }
 }
