@@ -1,0 +1,7 @@
+# Keep LF endings so `dart format` checks match between Windows and CI.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.png binary
+*.jpg binary
+*.jks binary
