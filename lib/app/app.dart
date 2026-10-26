@@ -46,11 +46,31 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   int _index = 0;
   bool _lookingUp = false;
 
-  Future<void> _completePending(List<Book> books) async {
+  /// Looks up pending books until none are left, including ones scanned
+  /// while a round was running. Stops when offline or nothing progresses;
+  /// the next catalog change (or a pull-to-refresh) tries again.
+  Future<void> _completePending() async {
     if (_lookingUp) return;
     _lookingUp = true;
+    // Books already handled this run, in case the catalog stream hasn't
+    // caught up with our own saves yet.
+    final handled = <String>{};
     try {
-      await ref.read(catalogActionsProvider).completePendingLookups(books);
+      while (mounted) {
+        final pending = (ref.read(booksProvider).value ?? const <Book>[])
+            .where(
+              (b) =>
+                  b.metadataSource == MetadataSource.pending &&
+                  !handled.contains(b.id),
+            )
+            .toList();
+        if (pending.isEmpty) break;
+        handled.addAll(pending.map((b) => b.id));
+        final done = await ref
+            .read(catalogActionsProvider)
+            .completePendingLookups(pending);
+        if (done == 0) break;
+      }
     } finally {
       _lookingUp = false;
     }
@@ -61,8 +81,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     // Fill in details for books scanned while offline whenever the catalog
     // loads or changes.
     ref.listen(booksProvider, (_, next) {
-      final books = next.value;
-      if (books != null) unawaited(_completePending(books));
+      if (next.value != null) unawaited(_completePending());
     });
 
     final pages = [

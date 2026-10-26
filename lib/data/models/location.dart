@@ -1,3 +1,5 @@
+import 'map_read.dart';
+
 /// A place a book can be: a room in the house, or a person it's lent to.
 enum LocationKind {
   room,
@@ -40,8 +42,8 @@ class Location {
 
   factory Location.fromMap(String id, Map<String, Object?> map) => Location(
     id: id,
-    name: (map['name'] as String?) ?? '',
+    name: readString(map, 'name') ?? '',
     kind: LocationKind.parse(map['kind']),
-    sortOrder: (map['sortOrder'] as num?)?.toInt() ?? 0,
+    sortOrder: readInt(map, 'sortOrder') ?? 0,
   );
 }

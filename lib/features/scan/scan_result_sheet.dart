@@ -7,7 +7,6 @@ import '../../data/models/book.dart';
 import '../../data/models/book_metadata.dart';
 import '../../data/services/metadata_service.dart';
 import '../catalog/book_edit_screen.dart';
-import '../catalog/library_screen.dart';
 import '../common/widgets.dart';
 
 /// Looks up a scanned ISBN and lets the user confirm before saving.
@@ -44,7 +43,7 @@ class _ScanResultSheetState extends ConsumerState<_ScanResultSheet> {
   @override
   void initState() {
     super.initState();
-    final settings = ref.read(scanSettingsProvider);
+    final settings = ref.read(effectiveScanSettingsProvider);
     _locationId = settings.locationId;
     _tagIds = [...settings.tagIds];
     _lookup();
@@ -100,7 +99,6 @@ class _ScanResultSheetState extends ConsumerState<_ScanResultSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final location = ref.watch(locationMapProvider)[_locationId];
     final d = _details;
 
     final Widget header = switch (_status) {
@@ -176,33 +174,13 @@ class _ScanResultSheetState extends ConsumerState<_ScanResultSheet> {
             const SizedBox(height: 12),
             header,
             const SizedBox(height: 12),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(locationIcon(location)),
-              title: Text(locationLabel(location)),
-              trailing: const Icon(Icons.edit_outlined),
-              onTap: () async {
-                final picked = await pickLocation(
-                  context,
-                  ref,
-                  selectedId: _locationId,
-                );
-                if (picked != null) {
-                  setState(() => _locationId = picked.value?.id);
-                }
-              },
+            LocationTile(
+              locationId: _locationId,
+              onChanged: (l) => setState(() => _locationId = l?.id),
             ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.label_outline),
-              title: _tagIds.isEmpty
-                  ? const Text('No tags')
-                  : TagChips(tagIds: _tagIds),
-              trailing: const Icon(Icons.edit_outlined),
-              onTap: () async {
-                final chosen = await pickTags(context, ref, selected: _tagIds);
-                if (chosen != null) setState(() => _tagIds = chosen.toList());
-              },
+            TagsTile(
+              tagIds: _tagIds,
+              onChanged: (t) => setState(() => _tagIds = t),
             ),
             const SizedBox(height: 8),
             Row(

@@ -7,7 +7,6 @@ import '../../data/catalog_actions.dart';
 import '../../data/models/book.dart';
 import '../../data/models/ids.dart';
 import '../common/widgets.dart';
-import 'library_screen.dart';
 
 /// Edits an existing book, or creates one by hand (no ISBN needed).
 class BookEditScreen extends ConsumerStatefulWidget {
@@ -79,8 +78,22 @@ class _BookEditScreenState extends ConsumerState<BookEditScreen> {
 
   String? _blankToNull(String s) => s.trim().isEmpty ? null : s.trim();
 
+  /// Fixed for the screen's lifetime so a double-tap on Save can't create
+  /// two books.
+  final String _newId = generateId();
+  bool _saving = false;
+
   Future<void> _save() async {
-    if (!_form.currentState!.validate()) return;
+    if (_saving || !_form.currentState!.validate()) return;
+    _saving = true;
+    try {
+      await _doSave();
+    } finally {
+      _saving = false;
+    }
+  }
+
+  Future<void> _doSave() async {
     final isbnText = _isbn.text.trim();
     final isbn13 = isbnText.isEmpty ? null : toIsbn13(isbnText);
     final books = ref.read(booksProvider).value ?? const <Book>[];
@@ -97,7 +110,7 @@ class _BookEditScreenState extends ConsumerState<BookEditScreen> {
               'ISBN. Save this as a separate entry anyway?',
           action: 'Save anyway',
         );
-        if (!ok) return;
+        if (!ok || !mounted) return;
       }
     }
 
@@ -110,7 +123,7 @@ class _BookEditScreenState extends ConsumerState<BookEditScreen> {
     final base =
         widget.book ??
         Book(
-          id: generateId(),
+          id: _newId,
           title: '',
           addedBy: ref.read(authStateProvider).value?.uid,
           addedAt: now,
@@ -144,8 +157,6 @@ class _BookEditScreenState extends ConsumerState<BookEditScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final locations = ref.watch(locationMapProvider);
-    final location = locations[_locationId];
     return Scaffold(
       appBar: AppBar(
         title: Text(_isNew ? 'Add book' : 'Edit book'),
@@ -218,53 +229,17 @@ class _BookEditScreenState extends ConsumerState<BookEditScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(locationIcon(location)),
-              title: Text(locationLabel(location)),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                final picked = await pickLocation(
-                  context,
-                  ref,
-                  selectedId: _locationId,
-                );
-                if (picked != null) {
-                  setState(() => _locationId = picked.value?.id);
-                }
-              },
+            LocationTile(
+              locationId: _locationId,
+              onChanged: (l) => setState(() => _locationId = l?.id),
             ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.label_outline),
-              title: _tagIds.isEmpty
-                  ? const Text('No tags')
-                  : TagChips(tagIds: _tagIds),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                final chosen = await pickTags(context, ref, selected: _tagIds);
-                if (chosen != null) setState(() => _tagIds = chosen.toList());
-              },
+            TagsTile(
+              tagIds: _tagIds,
+              onChanged: (t) => setState(() => _tagIds = t),
             ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.layers_outlined),
-              title: Text(_copies == 1 ? '1 copy' : '$_copies copies'),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.remove),
-                    onPressed: _copies <= 1
-                        ? null
-                        : () => setState(() => _copies--),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.add),
-                    onPressed: () => setState(() => _copies++),
-                  ),
-                ],
-              ),
+            CopiesTile(
+              copies: _copies,
+              onChanged: (c) => setState(() => _copies = c),
             ),
             const SizedBox(height: 8),
             TextFormField(

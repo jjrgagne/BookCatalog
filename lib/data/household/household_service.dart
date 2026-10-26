@@ -3,6 +3,8 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import '../models/map_read.dart';
+
 class Household {
   const Household({
     required this.id,
@@ -18,9 +20,9 @@ class Household {
 
   factory Household.fromMap(String id, Map<String, Object?> map) => Household(
     id: id,
-    name: (map['name'] as String?) ?? 'Our books',
-    inviteCode: (map['inviteCode'] as String?) ?? '',
-    ownerUid: (map['ownerUid'] as String?) ?? '',
+    name: readString(map, 'name') ?? 'Our books',
+    inviteCode: readString(map, 'inviteCode') ?? '',
+    ownerUid: readString(map, 'ownerUid') ?? '',
   );
 }
 
@@ -41,9 +43,9 @@ class Member {
 
   factory Member.fromMap(String uid, Map<String, Object?> map) => Member(
     uid: uid,
-    displayName: (map['displayName'] as String?) ?? 'Member',
-    email: map['email'] as String?,
-    role: (map['role'] as String?) ?? 'member',
+    displayName: readString(map, 'displayName') ?? 'Member',
+    email: readString(map, 'email'),
+    role: readString(map, 'role') ?? 'member',
   );
 }
 
@@ -90,7 +92,8 @@ class HouseholdService {
   /// The user's household, or null if none (or they were removed from it).
   Stream<String?> watchHouseholdId(String uid) async* {
     await for (final s in _user(uid).snapshots()) {
-      final householdId = s.data()?['householdId'] as String?;
+      final data = s.data();
+      final householdId = data == null ? null : readString(data, 'householdId');
       if (householdId == null) {
         yield null;
         continue;
@@ -152,7 +155,10 @@ class HouseholdService {
   Future<void> joinHousehold(User user, String code) async {
     code = normalizeInviteCode(code);
     final invite = await _invite(code).get();
-    final householdId = invite.data()?['householdId'] as String?;
+    final inviteData = invite.data();
+    final householdId = inviteData == null
+        ? null
+        : readString(inviteData, 'householdId');
     if (householdId == null) {
       throw const HouseholdException('That invite code was not found.');
     }

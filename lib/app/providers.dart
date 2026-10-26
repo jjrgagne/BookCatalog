@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../data/catalog_actions.dart';
 import '../data/household/household_service.dart';
 import '../data/models/book.dart';
+import '../data/models/ids.dart';
 import '../data/models/location.dart';
 import '../data/models/tag.dart';
 import '../data/repositories/catalog_repository.dart';
@@ -81,6 +84,8 @@ final catalogActionsProvider = Provider<CatalogActions>(
     ref.watch(catalogRepositoryProvider),
     ref.watch(metadataServiceProvider),
     userId: ref.watch(authStateProvider).value?.uid,
+    currentBook: (id) =>
+        ref.read(booksProvider).value?.where((b) => b.id == id).firstOrNull,
   ),
 );
 
@@ -140,6 +145,16 @@ class ScanSettings {
 
   /// Save every scan immediately instead of reviewing each one.
   final bool batchMode;
+
+  ScanSettings copyWith({
+    Object? locationId = unset,
+    List<String>? tagIds,
+    bool? batchMode,
+  }) => ScanSettings(
+    locationId: locationId == unset ? this.locationId : locationId as String?,
+    tagIds: tagIds ?? this.tagIds,
+    batchMode: batchMode ?? this.batchMode,
+  );
 }
 
 class ScanSettingsNotifier extends Notifier<ScanSettings> {
@@ -160,34 +175,20 @@ class ScanSettingsNotifier extends Notifier<ScanSettings> {
   }
 
   void setLocation(String? id) {
-    if (id == null) {
-      _prefs.remove(_location);
-    } else {
-      _prefs.setString(_location, id);
-    }
-    state = ScanSettings(
-      locationId: id,
-      tagIds: state.tagIds,
-      batchMode: state.batchMode,
+    unawaited(
+      id == null ? _prefs.remove(_location) : _prefs.setString(_location, id),
     );
+    state = state.copyWith(locationId: id);
   }
 
   void setTags(List<String> ids) {
-    _prefs.setStringList(_tags, ids);
-    state = ScanSettings(
-      locationId: state.locationId,
-      tagIds: ids,
-      batchMode: state.batchMode,
-    );
+    unawaited(_prefs.setStringList(_tags, ids));
+    state = state.copyWith(tagIds: ids);
   }
 
   void setBatchMode(bool on) {
-    _prefs.setBool(_batch, on);
-    state = ScanSettings(
-      locationId: state.locationId,
-      tagIds: state.tagIds,
-      batchMode: on,
-    );
+    unawaited(_prefs.setBool(_batch, on));
+    state = state.copyWith(batchMode: on);
   }
 }
 
@@ -195,3 +196,17 @@ final scanSettingsProvider =
     NotifierProvider<ScanSettingsNotifier, ScanSettings>(
       ScanSettingsNotifier.new,
     );
+
+/// Scan settings with deleted places and tags dropped, so new scans are
+/// never filed under a room or tag that no longer exists.
+final effectiveScanSettingsProvider = Provider<ScanSettings>((ref) {
+  final settings = ref.watch(scanSettingsProvider);
+  final locations = ref.watch(locationMapProvider);
+  final tags = ref.watch(tagMapProvider);
+  return settings.copyWith(
+    locationId: locations.containsKey(settings.locationId)
+        ? settings.locationId
+        : null,
+    tagIds: settings.tagIds.where(tags.containsKey).toList(),
+  );
+});

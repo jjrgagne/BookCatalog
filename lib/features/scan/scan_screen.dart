@@ -9,20 +9,25 @@ import '../../app/providers.dart';
 import '../../core/isbn.dart';
 import '../../data/catalog_actions.dart';
 import '../../data/models/book.dart';
-import '../../data/services/metadata_service.dart';
 import '../catalog/book_detail_screen.dart';
 import '../catalog/book_edit_screen.dart';
-import '../catalog/library_screen.dart';
 import '../common/widgets.dart';
 import 'ocr.dart';
 import 'scan_result_sheet.dart';
 
-/// One scan in the current session, shown in the running list.
+enum _ScanAction { added, extraCopy, moved }
+
+/// One scan in the current session. The row shows the book's live state
+/// (so it updates when background lookups finish), and [before] lets Undo
+/// reverse exactly what the scan did.
 class _SessionEntry {
-  _SessionEntry(this.bookId, this.isbn13, this.status);
+  _SessionEntry(this.bookId, this.isbn13, this.action, {this.before});
   final String bookId;
   final String isbn13;
-  String status;
+  final _ScanAction action;
+
+  /// The book before an extra copy or move, restored by Undo.
+  final Book? before;
 }
 
 class ScanScreen extends ConsumerStatefulWidget {
@@ -42,34 +47,25 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
     detectionSpeed: DetectionSpeed.normal,
   );
   bool _busy = false;
+  String? _lastIsbn;
+  DateTime _lastAt = DateTime(2000);
+  final List<_SessionEntry> _session = [];
 
   /// Full-screen colour flash: green = saved, amber = already in catalog.
   Color? _flash;
   Timer? _flashTimer;
 
-  void _flashScreen(Color color) {
-    _flashTimer?.cancel();
-    setState(() => _flash = color);
-    _flashTimer = Timer(const Duration(milliseconds: 350), () {
-      if (mounted) setState(() => _flash = null);
-    });
-  }
-
-  String? _lastIsbn;
-  DateTime _lastAt = DateTime(2000);
-  final List<_SessionEntry> _session = [];
-
   @override
   void initState() {
     super.initState();
-    if (widget.active) unawaited(_controller.start());
+    if (widget.active) unawaited(_startCamera());
   }
 
   @override
   void didUpdateWidget(ScanScreen old) {
     super.didUpdateWidget(old);
     if (widget.active != old.active) {
-      unawaited(widget.active ? _controller.start() : _controller.stop());
+      unawaited(widget.active ? _startCamera() : _stopCamera());
     }
   }
 
@@ -78,6 +74,49 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
     _flashTimer?.cancel();
     unawaited(_controller.dispose());
     super.dispose();
+  }
+
+  /// Starts the camera if this tab is showing and nothing else is using it.
+  /// Errors (already running, permission denied) are shown by the scanner
+  /// widget's error view instead of crashing.
+  Future<void> _startCamera() async {
+    if (!mounted || !widget.active) return;
+    try {
+      await _controller.start();
+    } catch (e) {
+      debugPrint('Camera start failed: $e');
+    }
+  }
+
+  Future<void> _stopCamera() async {
+    try {
+      await _controller.stop();
+    } catch (e) {
+      debugPrint('Camera stop failed: $e');
+    }
+  }
+
+  /// Pauses the camera while [task] shows a dialog, sheet or other screen.
+  Future<T> _withCameraPaused<T>(Future<T> Function() task) async {
+    await _stopCamera();
+    try {
+      return await task();
+    } finally {
+      await _startCamera();
+    }
+  }
+
+  void _flashScreen(Color color) {
+    if (!mounted) return;
+    _flashTimer?.cancel();
+    setState(() => _flash = color);
+    _flashTimer = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) setState(() => _flash = null);
+    });
+  }
+
+  void _record(_SessionEntry entry) {
+    if (mounted) setState(() => _session.insert(0, entry));
   }
 
   void _onDetect(BarcodeCapture capture) {
@@ -97,152 +136,125 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
   }
 
   Future<void> _handleIsbn(String isbn13) async {
+    if (_busy) return;
     _busy = true;
     try {
-      await HapticFeedback.mediumImpact();
-      await SystemSound.play(SystemSoundType.click);
-      final settings = ref.read(scanSettingsProvider);
+      unawaited(HapticFeedback.mediumImpact());
+      unawaited(SystemSound.play(SystemSoundType.click));
+      final settings = ref.read(effectiveScanSettingsProvider);
       final books = ref.read(booksProvider).value ?? const <Book>[];
       final existing = findByIsbn(books, isbn13);
       if (existing != null) {
         await _handleDuplicate(existing, settings.locationId);
-        return;
-      }
-      if (settings.batchMode) {
-        await _saveBatch(isbn13, settings);
+      } else if (settings.batchMode) {
+        await _saveQuick(isbn13, settings);
       } else {
-        await _controller.stop();
-        if (!mounted) return;
-        final saved = await showScanResultSheet(context, isbn13: isbn13);
+        final saved = await _withCameraPaused(
+          () => showScanResultSheet(context, isbn13: isbn13),
+        );
         if (saved != null) {
-          _session.insert(0, _SessionEntry(saved.id, isbn13, 'Saved'));
-          if (mounted) _flashScreen(Colors.green);
+          _record(_SessionEntry(saved.id, isbn13, _ScanAction.added));
+          _flashScreen(Colors.green);
         }
-        if (mounted && widget.active) await _controller.start();
       }
     } finally {
       _busy = false;
-      if (mounted) setState(() {});
     }
   }
 
-  Future<void> _saveBatch(String isbn13, ScanSettings settings) async {
-    final actions = ref.read(catalogActionsProvider);
-    final repo = ref.read(catalogRepositoryProvider);
-    // Save immediately so scanning a shelf never waits on the network.
-    final book = actions.newBookFromScan(
-      isbn13,
-      locationId: settings.locationId,
-      tagIds: settings.tagIds,
-    );
-    await repo.saveBook(book);
-    final entry = _SessionEntry(book.id, isbn13, 'Looking up…');
-    setState(() => _session.insert(0, entry));
+  /// Quick scan: save at once (so a shelf never waits on the network); the
+  /// app's background lookup fills in the details, online or later.
+  Future<void> _saveQuick(String isbn13, ScanSettings settings) async {
+    final book = ref
+        .read(catalogActionsProvider)
+        .newBookFromScan(
+          isbn13,
+          locationId: settings.locationId,
+          tagIds: settings.tagIds,
+        );
+    await ref.read(catalogRepositoryProvider).saveBook(book);
+    _record(_SessionEntry(book.id, isbn13, _ScanAction.added));
     _flashScreen(Colors.green);
-
-    unawaited(() async {
-      try {
-        final details = await ref.read(metadataServiceProvider).lookup(isbn13);
-        if (details == null) {
-          await repo.saveBook(
-            book.copyWith(metadataSource: MetadataSource.manual),
-          );
-          entry.status = 'Not found online — tap to edit';
-        } else {
-          await repo.saveBook(CatalogActions.applyMetadata(book, details));
-          entry.status = details.title;
-        }
-      } on LookupUnavailableException {
-        entry.status = 'Saved — details when online';
-      }
-      if (mounted) setState(() {});
-    }());
   }
 
-  Future<void> _handleDuplicate(
-    Book existing,
-    String? currentLocationId,
-  ) async {
+  Future<void> _handleDuplicate(Book existing, String? hereId) async {
     _flashScreen(Colors.amber);
-    await _controller.stop();
-    if (!mounted) return;
     final locations = ref.read(locationMapProvider);
-    final here = locations[currentLocationId];
-    final sameLocation = existing.locationId == currentLocationId;
-    final choice = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Already in the catalog'),
-        content: Text(
-          '"${existing.title}"\n${locationLabel(locations[existing.locationId])}'
-          '${existing.copies > 1 ? ' · ${existing.copies} copies' : ''}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+    final here = locations[hereId];
+    final choice = await _withCameraPaused(
+      () => showDialog<_ScanAction>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Already in the catalog'),
+          content: Text(
+            '"${existing.title}"\n'
+            '${locationLabel(locations[existing.locationId])}'
+            '${existing.copies > 1 ? ' · ${existing.copies} copies' : ''}',
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, 'copy'),
-            child: const Text('Add a copy'),
-          ),
-          if (!sameLocation)
-            FilledButton(
-              onPressed: () => Navigator.pop(context, 'move'),
-              child: Text('Move to ${here?.name ?? 'no location'}'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
             ),
-        ],
+            TextButton(
+              onPressed: () => Navigator.pop(context, _ScanAction.extraCopy),
+              child: const Text('Add a copy'),
+            ),
+            if (existing.locationId != hereId)
+              FilledButton(
+                onPressed: () => Navigator.pop(context, _ScanAction.moved),
+                child: Text('Move to ${here?.name ?? 'no location'}'),
+              ),
+          ],
+        ),
       ),
     );
+    if (choice == null) return;
+    await ref
+        .read(catalogRepositoryProvider)
+        .saveBook(
+          choice == _ScanAction.extraCopy
+              ? existing.copyWith(copies: existing.copies + 1)
+              : CatalogActions.moveBook(existing, here, locations),
+        );
+    _record(
+      _SessionEntry(existing.id, existing.isbn13!, choice, before: existing),
+    );
+  }
+
+  Future<void> _undo(_SessionEntry entry) async {
     final repo = ref.read(catalogRepositoryProvider);
-    if (choice == 'copy') {
-      await repo.saveBook(existing.copyWith(copies: existing.copies + 1));
-      _session.insert(
-        0,
-        _SessionEntry(
-          existing.id,
-          existing.isbn13!,
-          'Another copy of ${existing.title}',
-        ),
-      );
-    } else if (choice == 'move') {
-      await repo.saveBook(CatalogActions.moveBook(existing, here, locations));
-      _session.insert(
-        0,
-        _SessionEntry(
-          existing.id,
-          existing.isbn13!,
-          'Moved: ${existing.title}',
-        ),
-      );
+    if (entry.action == _ScanAction.added) {
+      await repo.deleteBook(entry.bookId);
+    } else if (entry.before != null) {
+      await repo.saveBook(entry.before!);
     }
-    if (mounted && widget.active) await _controller.start();
+    if (mounted) setState(() => _session.remove(entry));
   }
 
   Future<void> _readPrintedIsbn() async {
-    await _controller.stop();
-    try {
-      final OcrResult? ocr;
+    final isbn = await _withCameraPaused(() async {
+      final OcrResult? result;
       try {
-        ocr = await captureAndReadIsbn();
+        result = await captureAndReadIsbn();
       } on PlatformException catch (e) {
         if (mounted) {
           showSnack(context, 'Camera unavailable: ${e.message ?? e.code}');
         }
-        return;
+        return null;
       }
-      if (!mounted || ocr == null) return;
-      final result = ocr;
-      String? isbn;
-      if (result.isbns.length == 1) {
-        isbn = result.isbns.single;
-      } else if (result.isbns.length > 1) {
-        isbn = await showDialog<String>(
+      if (!mounted || result == null) return null;
+      final found = result.isbns;
+      final String? chosen;
+      if (found.length == 1) {
+        chosen = found.single;
+      } else if (found.length > 1) {
+        chosen = await showDialog<String>(
           context: context,
           builder: (context) => SimpleDialog(
             title: const Text('Which ISBN?'),
             children: [
-              for (final i in result.isbns)
+              for (final i in found)
                 SimpleDialogOption(
                   onPressed: () => Navigator.pop(context, i),
                   child: Text(displayIsbn(i)),
@@ -267,19 +279,18 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
             ],
           ),
         );
+        return null;
       }
-      if (isbn != null && mounted) {
-        final ok = await confirm(
-          context,
-          title: 'Use this ISBN?',
-          message: displayIsbn(isbn),
-          action: 'Look up',
-        );
-        if (ok) await _handleIsbn(isbn);
-      }
-    } finally {
-      if (mounted && widget.active && !_busy) await _controller.start();
-    }
+      if (chosen == null || !mounted) return null;
+      final ok = await confirm(
+        context,
+        title: 'Use this ISBN?',
+        message: displayIsbn(chosen),
+        action: 'Look up',
+      );
+      return ok ? chosen : null;
+    });
+    if (isbn != null) await _handleIsbn(isbn);
   }
 
   Future<void> _typeIsbn() async {
@@ -299,32 +310,72 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
   }
 
   Future<void> _noIsbn() async {
-    await _controller.stop();
-    final settings = ref.read(scanSettingsProvider);
-    if (!mounted) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => BookEditScreen(
-          initialLocationId: settings.locationId,
-          initialTagIds: settings.tagIds,
+    final settings = ref.read(effectiveScanSettingsProvider);
+    await _withCameraPaused(
+      () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => BookEditScreen(
+            initialLocationId: settings.locationId,
+            initialTagIds: settings.tagIds,
+          ),
         ),
       ),
     );
-    if (mounted && widget.active) await _controller.start();
   }
 
-  Future<void> _undo(_SessionEntry entry) async {
-    await ref.read(catalogRepositoryProvider).deleteBook(entry.bookId);
-    setState(() => _session.remove(entry));
+  Widget _sessionTile(_SessionEntry e, Map<String, Book> books) {
+    final book = books[e.bookId];
+    final String title;
+    final String subtitle;
+    if (book == null) {
+      title = 'Removed';
+      subtitle = displayIsbn(e.isbn13);
+    } else {
+      title = book.title;
+      subtitle = switch (e.action) {
+        _ScanAction.extraCopy => 'Added a copy (now ${book.copies})',
+        _ScanAction.moved => 'Moved here',
+        _ScanAction.added => switch (book.metadataSource) {
+          MetadataSource.pending => 'Looking up details…',
+          MetadataSource.manual when book.authors.isEmpty =>
+            'Not found online — tap to edit',
+          _ => book.authorsText.isEmpty ? 'Saved' : book.authorsText,
+        },
+      };
+    }
+    return ListTile(
+      dense: true,
+      leading: BookCover(url: book?.coverUrl, width: 28),
+      title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: book == null
+          ? null
+          : IconButton(
+              tooltip: 'Undo',
+              icon: const Icon(Icons.undo),
+              onPressed: () => _undo(e),
+            ),
+      onTap: book == null
+          ? null
+          : () => _withCameraPaused(
+              () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => BookDetailScreen(bookId: e.bookId),
+                ),
+              ),
+            ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final settings = ref.watch(scanSettingsProvider);
-    final locations = ref.watch(locationMapProvider);
-    final location = locations[settings.locationId];
+    final settings = ref.watch(effectiveScanSettingsProvider);
     final notifier = ref.read(scanSettingsProvider.notifier);
+    final books = {
+      for (final b in ref.watch(booksProvider).value ?? const <Book>[]) b.id: b,
+    };
     final theme = Theme.of(context);
 
     final scaffold = Scaffold(
@@ -336,37 +387,19 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
             margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: Column(
               children: [
-                ListTile(
+                LocationTile(
                   dense: true,
-                  leading: Icon(locationIcon(location)),
-                  title: Text('Filing to: ${locationLabel(location)}'),
-                  trailing: const Icon(Icons.edit_outlined, size: 20),
-                  onTap: () async {
-                    final picked = await pickLocation(
-                      context,
-                      ref,
-                      selectedId: settings.locationId,
-                      title: 'File new scans in',
-                    );
-                    if (picked != null) notifier.setLocation(picked.value?.id);
-                  },
+                  locationId: settings.locationId,
+                  label: (l) => 'Filing to: ${locationLabel(l)}',
+                  pickerTitle: 'File new scans in',
+                  onChanged: (l) => notifier.setLocation(l?.id),
                 ),
-                ListTile(
+                TagsTile(
                   dense: true,
-                  leading: const Icon(Icons.label_outline),
-                  title: settings.tagIds.isEmpty
-                      ? const Text('No tags for new scans')
-                      : TagChips(tagIds: settings.tagIds),
-                  trailing: const Icon(Icons.edit_outlined, size: 20),
-                  onTap: () async {
-                    final chosen = await pickTags(
-                      context,
-                      ref,
-                      selected: settings.tagIds,
-                      title: 'Tags for new scans',
-                    );
-                    if (chosen != null) notifier.setTags(chosen.toList());
-                  },
+                  tagIds: settings.tagIds,
+                  emptyText: 'No tags for new scans',
+                  pickerTitle: 'Tags for new scans',
+                  onChanged: notifier.setTags,
                 ),
                 SwitchListTile(
                   dense: true,
@@ -429,7 +462,13 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
                       child: IconButton.filledTonal(
                         tooltip: 'Torch',
                         icon: const Icon(Icons.flashlight_on_outlined),
-                        onPressed: _controller.toggleTorch,
+                        onPressed: () async {
+                          try {
+                            await _controller.toggleTorch();
+                          } catch (e) {
+                            debugPrint('Torch failed: $e');
+                          }
+                        },
                       ),
                     ),
                     const Positioned(
@@ -494,33 +533,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
                           style: theme.textTheme.labelLarge,
                         ),
                       ),
-                      for (final e in _session)
-                        ListTile(
-                          dense: true,
-                          leading: const Icon(Icons.check_circle_outline),
-                          title: Text(
-                            e.status,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Text(displayIsbn(e.isbn13)),
-                          trailing:
-                              e.status.startsWith('Another copy') ||
-                                  e.status.startsWith('Moved')
-                              ? null
-                              : IconButton(
-                                  tooltip: 'Undo',
-                                  icon: const Icon(Icons.undo),
-                                  onPressed: () => _undo(e),
-                                ),
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  BookDetailScreen(bookId: e.bookId),
-                            ),
-                          ),
-                        ),
+                      for (final e in _session) _sessionTile(e, books),
                     ],
                   ),
           ),

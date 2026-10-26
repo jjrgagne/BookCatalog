@@ -1,3 +1,5 @@
+import 'map_read.dart';
+
 class Tag {
   const Tag({required this.id, required this.name, this.color = 0xFF607D8B});
 
@@ -14,8 +16,8 @@ class Tag {
 
   factory Tag.fromMap(String id, Map<String, Object?> map) => Tag(
     id: id,
-    name: (map['name'] as String?) ?? '',
-    color: (map['color'] as num?)?.toInt() ?? 0xFF607D8B,
+    name: readString(map, 'name') ?? '',
+    color: readInt(map, 'color') ?? 0xFF607D8B,
   );
 }
 

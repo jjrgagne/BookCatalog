@@ -21,7 +21,9 @@ class LocationsScreen extends ConsumerWidget {
     }
     final rooms = locations.where((l) => !l.isPerson).toList();
     final people = locations.where((l) => l.isPerson).toList();
-    final unplaced = counts[null] ?? 0;
+    final known = {for (final l in locations) l.id};
+    // Includes books whose place was deleted on another phone.
+    final unplaced = books.where((b) => !known.contains(b.locationId)).length;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Places')),
@@ -49,7 +51,7 @@ class LocationsScreen extends ConsumerWidget {
               leading: const Icon(Icons.help_outline),
               title: const Text('No location'),
               trailing: Text('$unplaced'),
-              onTap: () => _openLibrary(context, null, noLocation: true),
+              onTap: () => _openLibrary(context, noLocationFilter),
             ),
         ],
       ),
@@ -62,17 +64,12 @@ class LocationsScreen extends ConsumerWidget {
   }
 }
 
-void _openLibrary(
-  BuildContext context,
-  Location? l, {
-  bool noLocation = false,
-}) {
+/// Opens the library filtered to a location id (or [noLocationFilter]).
+void _openLibrary(BuildContext context, String locationId) {
   Navigator.push(
     context,
     MaterialPageRoute(
-      builder: (_) => noLocation
-          ? const _UnplacedBooks()
-          : LibraryScreen(initialLocationId: l!.id),
+      builder: (_) => LibraryScreen(initialLocationId: locationId),
     ),
   );
 }
@@ -224,57 +221,11 @@ class _Section extends ConsumerWidget {
                       ),
                     ],
                   ),
-                  onTap: () => _openLibrary(context, locations[i]),
+                  onTap: () => _openLibrary(context, locations[i].id),
                 ),
             ],
           ),
       ],
-    );
-  }
-}
-
-/// Books that have no location yet.
-class _UnplacedBooks extends ConsumerWidget {
-  const _UnplacedBooks();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final books =
-        (ref.watch(booksProvider).value ?? const <Book>[])
-            .where((b) => b.locationId == null)
-            .toList()
-          ..sort((a, b) => a.title.compareTo(b.title));
-    return Scaffold(
-      appBar: AppBar(title: const Text('No location')),
-      body: ListView(
-        children: [
-          for (final b in books)
-            ListTile(
-              leading: BookCover(url: b.coverUrl, width: 36),
-              title: Text(b.title),
-              subtitle: Text(b.authorsText),
-              trailing: TextButton(
-                child: const Text('Place'),
-                onPressed: () async {
-                  final picked = await pickLocation(
-                    context,
-                    ref,
-                    title: 'Move to',
-                    allowNone: false,
-                  );
-                  if (picked == null) return;
-                  await ref
-                      .read(catalogActionsProvider)
-                      .moveBooks(
-                        [b],
-                        picked.value,
-                        ref.read(locationMapProvider),
-                      );
-                },
-              ),
-            ),
-        ],
-      ),
     );
   }
 }

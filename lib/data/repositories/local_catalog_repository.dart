@@ -26,40 +26,50 @@ class LocalCatalogRepository implements CatalogRepository {
 
   Future<void> _load() async {
     if (!await _file.exists()) return;
+    Object? json;
     try {
-      final json = jsonDecode(await _file.readAsString()) as Map;
-      Map<String, Object?> m(Object? e) => (e as Map).cast<String, Object?>();
-      for (final e in (json['books'] as List? ?? const [])) {
-        final b = Book.fromMap(m(e)['id'] as String, m(e));
-        _books[b.id] = b;
-      }
-      for (final e in (json['locations'] as List? ?? const [])) {
-        final l = Location.fromMap(m(e)['id'] as String, m(e));
-        _locations[l.id] = l;
-      }
-      for (final e in (json['tags'] as List? ?? const [])) {
-        final t = Tag.fromMap(m(e)['id'] as String, m(e));
-        _tags[t.id] = t;
-      }
+      json = jsonDecode(await _file.readAsString());
     } on FormatException {
       // Corrupt file: keep a copy for recovery and start empty.
       await _file.copy('${_file.path}.corrupt');
+      return;
+    }
+    if (json is! Map) return;
+    _readInto(json['books'], _books, Book.fromMap);
+    _readInto(json['locations'], _locations, Location.fromMap);
+    _readInto(json['tags'], _tags, Tag.fromMap);
+  }
+
+  /// Loads records with a string `id`, skipping any malformed entries.
+  static void _readInto<T>(
+    Object? list,
+    Map<String, T> into,
+    T Function(String id, Map<String, Object?> map) fromMap,
+  ) {
+    if (list is! List) return;
+    for (final e in list) {
+      if (e is! Map) continue;
+      final map = e.cast<String, Object?>();
+      final id = map['id'];
+      if (id is String) into[id] = fromMap(id, map);
     }
   }
+
+  static List<Map<String, Object?>> _writeAll<T>(
+    Iterable<T> items,
+    String Function(T) id,
+    Map<String, Object?> Function(T) toMap,
+  ) => [
+    for (final item in items) {'id': id(item), ...toMap(item)},
+  ];
 
   Future<void> _changed() async {
     _changes.add(null);
     final json = jsonEncode({
       'version': 1,
-      'books': [
-        for (final b in _books.values) {'id': b.id, ...b.toMap()},
-      ],
-      'locations': [
-        for (final l in _locations.values) {'id': l.id, ...l.toMap()},
-      ],
-      'tags': [
-        for (final t in _tags.values) {'id': t.id, ...t.toMap()},
-      ],
+      'books': _writeAll(_books.values, (b) => b.id, (b) => b.toMap()),
+      'locations': _writeAll(_locations.values, (l) => l.id, (l) => l.toMap()),
+      'tags': _writeAll(_tags.values, (t) => t.id, (t) => t.toMap()),
     });
     // Serialise writes; write to a temp file then rename for atomicity.
     _writing = _writing.then((_) async {
@@ -71,12 +81,24 @@ class LocalCatalogRepository implements CatalogRepository {
     await _writing;
   }
 
-  Stream<List<T>> _watch<T>(Iterable<T> Function() snapshot) async* {
-    await _ensureLoaded();
-    yield snapshot().toList();
-    await for (final _ in _changes.stream) {
-      yield snapshot().toList();
-    }
+  /// Emits the current list, then again after every change. Subscribes to
+  /// changes before loading so nothing between load and listen is missed.
+  Stream<List<T>> _watch<T>(Iterable<T> Function() snapshot) {
+    late final StreamController<List<T>> controller;
+    StreamSubscription<void>? sub;
+    controller = StreamController<List<T>>(
+      onListen: () {
+        sub = _changes.stream.listen(
+          (_) => controller.add(snapshot().toList()),
+        );
+        _ensureLoaded().then(
+          (_) => controller.add(snapshot().toList()),
+          onError: controller.addError,
+        );
+      },
+      onCancel: () => sub?.cancel(),
+    );
+    return controller.stream;
   }
 
   @override

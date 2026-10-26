@@ -11,10 +11,14 @@ import 'book_edit_screen.dart';
 
 enum LibrarySort { title, author, recent }
 
+/// Location filter value meaning "books with no (existing) location".
+const noLocationFilter = '\u0000none';
+
 class LibraryScreen extends ConsumerStatefulWidget {
   const LibraryScreen({super.key, this.initialLocationId, this.initialTagId});
 
-  /// When opened from Places/Tags, start filtered to that location or tag.
+  /// When opened from Places/Tags, start filtered to that location (or
+  /// [noLocationFilter]) or tag.
   final String? initialLocationId;
   final String? initialTagId;
 
@@ -44,21 +48,31 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     super.dispose();
   }
 
-  List<Book> _filter(List<Book> books) {
+  List<Book> _filter(List<Book> books, Map<String, Location> locations) {
     final result = books.where((b) {
-      if (_locationId != null && b.locationId != _locationId) return false;
+      if (_locationId == noLocationFilter) {
+        // Includes books whose location was deleted elsewhere.
+        if (locations.containsKey(b.locationId)) return false;
+      } else if (_locationId != null && b.locationId != _locationId) {
+        return false;
+      }
       if (!_tagIds.every(b.tagIds.contains)) return false;
       return bookMatches(b, _query);
     }).toList();
-    int byTitle(Book a, Book b) =>
-        foldForSearch(a.title).compareTo(foldForSearch(b.title));
+
+    // Fold each key once rather than on every comparison.
+    final titles = {for (final b in result) b.id: foldForSearch(b.title)};
+    int byTitle(Book a, Book b) => titles[a.id]!.compareTo(titles[b.id]!);
     switch (_sort) {
       case LibrarySort.title:
         result.sort(byTitle);
       case LibrarySort.author:
+        final authors = {
+          for (final b in result)
+            b.id: foldForSearch(b.authors.firstOrNull ?? '\u{10FFFF}'),
+        };
         result.sort((a, b) {
-          final c = foldForSearch(a.authors.firstOrNull ?? '~')
-              .compareTo(foldForSearch(b.authors.firstOrNull ?? '~'));
+          final c = authors[a.id]!.compareTo(authors[b.id]!);
           return c != 0 ? c : byTitle(a, b);
         });
       case LibrarySort.recent:
@@ -88,13 +102,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   ];
 
   Future<void> _moveSelected() async {
-    final picked = await pickLocation(context, ref, title: 'Move to');
-    if (picked == null) return;
     final books = _selectedBooks();
-    await ref
-        .read(catalogActionsProvider)
-        .moveBooks(books, picked.value, ref.read(locationMapProvider));
-    if (!mounted) return;
+    final picked = await pickAndMoveBooks(context, ref, books);
+    if (picked == null || !mounted) return;
     setState(_selected.clear);
     showSnack(
       context,
@@ -155,11 +165,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final locations = ref.watch(locationMapProvider);
     final tags = ref.watch(tagMapProvider);
     final all = booksAsync.value ?? const <Book>[];
-    final books = _filter(all);
+    final books = _filter(all, locations);
     final pending = all
         .where((b) => b.metadataSource == MetadataSource.pending)
         .length;
     final canPop = Navigator.canPop(context);
+
+    final location = locations[_locationId];
+    final locationFilterLabel = switch (_locationId) {
+      null => 'Any location',
+      noLocationFilter => 'No location',
+      _ => location?.name ?? 'Deleted place',
+    };
 
     final appBar = _selecting
         ? AppBar(
@@ -194,9 +211,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
           )
         : AppBar(
             title: Text(
-              canPop && _locationId != null
-                  ? locations[_locationId]?.name ?? 'Library'
-                  : 'Library',
+              canPop && _locationId != null ? locationFilterLabel : 'Library',
             ),
             actions: [
               IconButton(
@@ -224,7 +239,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             ],
           );
 
-    final location = locations[_locationId];
     final filters = SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -232,21 +246,22 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         children: [
           InputChip(
             avatar: Icon(locationIcon(location), size: 18),
-            label: Text(location?.name ?? 'Any location'),
-            selected: location != null,
+            label: Text(locationFilterLabel),
+            selected: _locationId != null,
             onPressed: () async {
               final picked = await pickLocation(
                 context,
                 ref,
                 selectedId: _locationId,
                 title: 'Show books in',
-                allowNone: false,
               );
               if (picked != null) {
-                setState(() => _locationId = picked.value?.id);
+                setState(
+                  () => _locationId = picked.value?.id ?? noLocationFilter,
+                );
               }
             },
-            onDeleted: location == null
+            onDeleted: _locationId == null
                 ? null
                 : () => setState(() => _locationId = null),
           ),
@@ -438,9 +453,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                 context,
                 MaterialPageRoute(
                   builder: (_) => BookEditScreen(
-                    initialLocationId:
-                        _locationId ??
-                        ref.read(scanSettingsProvider).locationId,
+                    initialLocationId: switch (_locationId) {
+                      noLocationFilter => null,
+                      null =>
+                        ref.read(effectiveScanSettingsProvider).locationId,
+                      final id => id,
+                    },
                   ),
                 ),
               ),
@@ -479,10 +497,4 @@ class _EmptyLibrary extends StatelessWidget {
       ),
     ],
   );
-}
-
-/// Location shown for a book, e.g. "Living Room" or "On loan to Sam".
-String locationLabel(Location? location) {
-  if (location == null) return 'No location';
-  return location.isPerson ? 'On loan to ${location.name}' : location.name;
 }

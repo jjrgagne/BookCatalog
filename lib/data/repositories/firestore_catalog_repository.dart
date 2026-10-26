@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/book.dart';
 import '../models/location.dart';
@@ -47,8 +48,13 @@ class FirestoreCatalogRepository implements CatalogRepository {
   @override
   Stream<List<Tag>> watchTags() => _watch(_tags, Tag.fromMap);
 
-  void _fireAndForget(Future<void> write) =>
-      unawaited(write.catchError((_) {}));
+  /// Writes apply to the local cache at once and sync later; the future
+  /// only completes on server acknowledgement, so it is not awaited. A
+  /// rejected write (e.g. after being removed from the household) is logged
+  /// and Firestore rolls the cached change back, which the UI then shows.
+  void _fireAndForget(Future<void> write) => unawaited(
+    write.catchError((Object e) => debugPrint('Firestore write failed: $e')),
+  );
 
   /// Commits [items] in batches of 400 (Firestore allows 500 per batch).
   Future<void> _saveAll<T>(

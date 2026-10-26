@@ -93,7 +93,13 @@ class MoreScreen extends ConsumerWidget {
             leading: const Icon(Icons.file_download_outlined),
             title: const Text('Export catalog (CSV)'),
             subtitle: const Text('Opens in Sheets, Excel, etc.'),
-            onTap: () => _exportCsv(context, ref),
+            onTap: () async {
+              try {
+                await _exportCsv(context, ref);
+              } catch (e) {
+                if (context.mounted) showSnack(context, 'Export failed: $e');
+              }
+            },
           ),
           const Divider(),
           AboutListTile(

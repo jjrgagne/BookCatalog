@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/providers.dart';
+import '../../data/models/book.dart';
 import '../../data/models/ids.dart';
 import '../../data/models/location.dart';
 import '../../data/models/tag.dart';
@@ -92,20 +93,159 @@ IconData locationIcon(Location? location) => location == null
     ? Icons.person_outline
     : Icons.meeting_room_outlined;
 
+/// Location shown for a book, e.g. "Living Room" or "On loan to Sam".
+String locationLabel(Location? location) {
+  if (location == null) return 'No location';
+  return location.isPerson ? 'On loan to ${location.name}' : location.name;
+}
+
+/// A row showing a location; tapping it opens the location picker.
+class LocationTile extends ConsumerWidget {
+  const LocationTile({
+    super.key,
+    required this.locationId,
+    required this.onChanged,
+    this.label,
+    this.pickerTitle = 'Choose location',
+    this.dense = false,
+  });
+
+  final String? locationId;
+  final ValueChanged<Location?> onChanged;
+
+  /// Overrides the text, e.g. "Filing to: Office".
+  final String Function(Location?)? label;
+  final String pickerTitle;
+  final bool dense;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final location = ref.watch(locationMapProvider)[locationId];
+    return ListTile(
+      dense: dense,
+      contentPadding: dense ? null : EdgeInsets.zero,
+      leading: Icon(locationIcon(location)),
+      title: Text((label ?? locationLabel)(location)),
+      trailing: const Icon(Icons.edit_outlined, size: 20),
+      onTap: () async {
+        final picked = await pickLocation(
+          context,
+          ref,
+          selectedId: locationId,
+          title: pickerTitle,
+        );
+        if (picked != null) onChanged(picked.value);
+      },
+    );
+  }
+}
+
+/// A row showing tags; tapping it opens the tag picker.
+class TagsTile extends ConsumerWidget {
+  const TagsTile({
+    super.key,
+    required this.tagIds,
+    required this.onChanged,
+    this.emptyText = 'No tags',
+    this.pickerTitle = 'Tags',
+    this.dense = false,
+  });
+
+  final List<String> tagIds;
+  final ValueChanged<List<String>> onChanged;
+  final String emptyText;
+  final String pickerTitle;
+  final bool dense;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => ListTile(
+    dense: dense,
+    contentPadding: dense ? null : EdgeInsets.zero,
+    leading: const Icon(Icons.label_outline),
+    title: tagIds.isEmpty ? Text(emptyText) : TagChips(tagIds: tagIds),
+    trailing: const Icon(Icons.edit_outlined, size: 20),
+    onTap: () async {
+      final chosen = await pickTags(
+        context,
+        ref,
+        selected: tagIds,
+        title: pickerTitle,
+      );
+      if (chosen != null) onChanged(chosen.toList());
+    },
+  );
+}
+
+/// "3 copies  [-] [+]".
+class CopiesTile extends StatelessWidget {
+  const CopiesTile({super.key, required this.copies, required this.onChanged});
+
+  final int copies;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+    contentPadding: EdgeInsets.zero,
+    leading: const Icon(Icons.layers_outlined),
+    title: Text(copies == 1 ? '1 copy' : '$copies copies'),
+    trailing: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: 'One fewer',
+          icon: const Icon(Icons.remove),
+          onPressed: copies <= 1 ? null : () => onChanged(copies - 1),
+        ),
+        IconButton(
+          tooltip: 'One more',
+          icon: const Icon(Icons.add),
+          onPressed: () => onChanged(copies + 1),
+        ),
+      ],
+    ),
+  );
+}
+
+/// Asks where to move [books], then moves them (remembering the room when
+/// lending to a person). Returns the picked result, or null if cancelled.
+Future<Picked<Location?>?> pickAndMoveBooks(
+  BuildContext context,
+  WidgetRef ref,
+  List<Book> books, {
+  String title = 'Move to',
+  bool allowNone = true,
+}) async {
+  final picked = await pickLocation(
+    context,
+    ref,
+    selectedId: books.length == 1 ? books.single.locationId : null,
+    title: title,
+    allowNone: allowNone,
+  );
+  if (picked == null) return null;
+  await ref
+      .read(catalogActionsProvider)
+      .moveBooks(books, picked.value, ref.read(locationMapProvider));
+  return picked;
+}
+
 /// Result of a picker, so "chose nothing" differs from "cancelled" (null).
 class Picked<T> {
   const Picked(this.value);
   final T value;
 }
 
-/// Asks for a single line of text.
+/// Asks for text: one line (names, codes) or, with [multiline], free text
+/// such as notes. Returns the trimmed text, or null if cancelled.
 Future<String?> showTextDialog(
   BuildContext context, {
   required String title,
   String initial = '',
   String? hint,
   String action = 'Save',
+  bool multiline = false,
 }) {
+  // Not disposed: the dialog's closing animation still uses it after pop.
   final controller = TextEditingController(text: initial);
   return showDialog<String>(
     context: context,
@@ -114,9 +254,16 @@ Future<String?> showTextDialog(
       content: TextField(
         controller: controller,
         autofocus: true,
-        textCapitalization: TextCapitalization.words,
-        decoration: InputDecoration(hintText: hint),
-        onSubmitted: (v) => Navigator.pop(context, v.trim()),
+        textCapitalization: multiline
+            ? TextCapitalization.sentences
+            : TextCapitalization.words,
+        minLines: multiline ? 3 : 1,
+        maxLines: multiline ? 8 : 1,
+        decoration: InputDecoration(
+          hintText: hint,
+          border: multiline ? const OutlineInputBorder() : null,
+        ),
+        onSubmitted: multiline ? null : (v) => Navigator.pop(context, v.trim()),
       ),
       actions: [
         TextButton(

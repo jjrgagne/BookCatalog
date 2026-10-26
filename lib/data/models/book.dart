@@ -1,4 +1,5 @@
 import 'ids.dart';
+import 'map_read.dart';
 
 /// Where a book's details came from.
 enum MetadataSource {
@@ -122,31 +123,24 @@ class Book {
     'updatedAt': updatedAt.millisecondsSinceEpoch,
   };
 
-  factory Book.fromMap(String id, Map<String, Object?> map) {
-    DateTime time(Object? v) => v is int
-        ? DateTime.fromMillisecondsSinceEpoch(v)
-        : DateTime.fromMillisecondsSinceEpoch(0);
-    List<String> strings(Object? v) =>
-        v is List ? v.whereType<String>().toList() : const [];
-    return Book(
-      id: id,
-      isbn13: map['isbn13'] as String?,
-      isbn10: map['isbn10'] as String?,
-      title: (map['title'] as String?) ?? '',
-      subtitle: map['subtitle'] as String?,
-      authors: strings(map['authors']),
-      publisher: map['publisher'] as String?,
-      publishedYear: (map['publishedYear'] as num?)?.toInt(),
-      coverUrl: map['coverUrl'] as String?,
-      locationId: map['locationId'] as String?,
-      previousLocationId: map['previousLocationId'] as String?,
-      tagIds: strings(map['tagIds']),
-      copies: (map['copies'] as num?)?.toInt() ?? 1,
-      notes: (map['notes'] as String?) ?? '',
-      metadataSource: MetadataSource.parse(map['metadataSource']),
-      addedBy: map['addedBy'] as String?,
-      addedAt: time(map['addedAt']),
-      updatedAt: time(map['updatedAt']),
-    );
-  }
+  factory Book.fromMap(String id, Map<String, Object?> map) => Book(
+    id: id,
+    isbn13: readString(map, 'isbn13'),
+    isbn10: readString(map, 'isbn10'),
+    title: readString(map, 'title') ?? '',
+    subtitle: readString(map, 'subtitle'),
+    authors: readStrings(map, 'authors'),
+    publisher: readString(map, 'publisher'),
+    publishedYear: readInt(map, 'publishedYear'),
+    coverUrl: readString(map, 'coverUrl'),
+    locationId: readString(map, 'locationId'),
+    previousLocationId: readString(map, 'previousLocationId'),
+    tagIds: readStrings(map, 'tagIds'),
+    copies: (readInt(map, 'copies') ?? 1).clamp(1, 9999),
+    notes: readString(map, 'notes') ?? '',
+    metadataSource: MetadataSource.parse(map['metadataSource']),
+    addedBy: readString(map, 'addedBy'),
+    addedAt: readTime(map, 'addedAt'),
+    updatedAt: readTime(map, 'updatedAt'),
+  );
 }

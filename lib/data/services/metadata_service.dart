@@ -28,11 +28,13 @@ typedef CoverCheck = Future<bool> Function(String url);
 /// Library's cover-by-ISBN as the last resort. So a book can get its details
 /// from Open Library and its cover from Google Books.
 class MetadataService {
-  MetadataService({http.Client? client, CoverCheck? coverCheck})
-    : this.withSources(
-        _defaultSources(client ?? http.Client()),
-        coverCheck: coverCheck ?? _httpCoverCheck(client ?? http.Client()),
-      );
+  factory MetadataService({http.Client? client, CoverCheck? coverCheck}) {
+    final c = client ?? http.Client();
+    return MetadataService.withSources(
+      _defaultSources(c),
+      coverCheck: coverCheck ?? _httpCoverCheck(c),
+    );
+  }
 
   MetadataService.withSources(this._sources, {required this.coverCheck});
 

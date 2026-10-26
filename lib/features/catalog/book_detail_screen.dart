@@ -4,10 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/providers.dart';
 import '../../data/catalog_actions.dart';
 import '../../data/models/book.dart';
-import '../../data/services/metadata_service.dart';
 import '../common/widgets.dart';
 import 'book_edit_screen.dart';
-import 'library_screen.dart';
 
 class BookDetailScreen extends ConsumerWidget {
   const BookDetailScreen({super.key, required this.bookId});
@@ -32,67 +30,28 @@ class BookDetailScreen extends ConsumerWidget {
     final repo = ref.read(catalogRepositoryProvider);
     final theme = Theme.of(context);
 
-    Future<void> move() async {
-      final picked = await pickLocation(
-        context,
-        ref,
-        selectedId: book.locationId,
-        title: 'Move to',
-      );
-      if (picked == null) return;
-      await repo.saveBook(
-        CatalogActions.moveBook(book, picked.value, locations),
-      );
-    }
-
     Future<void> editNotes() async {
-      final controller = TextEditingController(text: book.notes);
-      final notes = await showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Notes'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            maxLines: 8,
-            minLines: 3,
-            textCapitalization: TextCapitalization.sentences,
-            decoration: const InputDecoration(border: OutlineInputBorder()),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text),
-              child: const Text('Save'),
-            ),
-          ],
-        ),
+      final notes = await showTextDialog(
+        context,
+        title: 'Notes',
+        initial: book.notes,
+        multiline: true,
       );
-      if (notes != null) {
-        await repo.saveBook(book.copyWith(notes: notes.trim()));
-      }
+      if (notes != null) await repo.saveBook(book.copyWith(notes: notes));
     }
 
     Future<void> lookUpAgain() async {
-      if (book.isbn13 == null) return;
-      try {
-        final details = await ref
-            .read(metadataServiceProvider)
-            .lookup(book.isbn13!);
-        if (details == null) {
-          if (context.mounted) showSnack(context, 'No details found online.');
-          return;
-        }
-        await repo.saveBook(CatalogActions.applyMetadata(book, details));
-        if (context.mounted) showSnack(context, 'Details updated.');
-      } on LookupUnavailableException {
-        if (context.mounted) {
-          showSnack(context, 'Could not reach the book services. Offline?');
-        }
-      }
+      final outcome = await ref
+          .read(catalogActionsProvider)
+          .lookUpAndApply(book);
+      if (!context.mounted) return;
+      final message = switch (outcome) {
+        LookupOutcome.updated => 'Details updated.',
+        LookupOutcome.notFound => 'No details found online.',
+        LookupOutcome.offline => 'Could not reach the book services. Offline?',
+        LookupOutcome.skipped => 'Already looking this book up…',
+      };
+      showSnack(context, message);
     }
 
     return Scaffold(
@@ -185,7 +144,7 @@ class BookDetailScreen extends ConsumerWidget {
                       ? null
                       : Text('Usually in ${returnTo.name}'),
                   trailing: TextButton(
-                    onPressed: move,
+                    onPressed: () => pickAndMoveBooks(context, ref, [book]),
                     child: Text(
                       location?.isPerson ?? false ? 'Move' : 'Move / Lend',
                     ),
@@ -211,47 +170,19 @@ class BookDetailScreen extends ConsumerWidget {
                     ),
                   ),
                 const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.label_outline),
-                  title: book.tagIds.isEmpty
-                      ? const Text('No tags')
-                      : TagChips(tagIds: book.tagIds),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () async {
-                    final chosen = await pickTags(
-                      context,
-                      ref,
-                      selected: book.tagIds,
-                    );
-                    if (chosen != null) {
-                      await repo.saveBook(
-                        book.copyWith(tagIds: chosen.toList()),
-                      );
-                    }
-                  },
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.layers_outlined),
-                  title: Text(
-                    book.copies == 1 ? '1 copy' : '${book.copies} copies',
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Column(
                     children: [
-                      IconButton(
-                        icon: const Icon(Icons.remove),
-                        onPressed: book.copies <= 1
-                            ? null
-                            : () => repo.saveBook(
-                                book.copyWith(copies: book.copies - 1),
-                              ),
+                      TagsTile(
+                        tagIds: book.tagIds,
+                        onChanged: (t) =>
+                            repo.saveBook(book.copyWith(tagIds: t)),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.add),
-                        onPressed: () => repo.saveBook(
-                          book.copyWith(copies: book.copies + 1),
-                        ),
+                      CopiesTile(
+                        copies: book.copies,
+                        onChanged: (c) =>
+                            repo.saveBook(book.copyWith(copies: c)),
                       ),
                     ],
                   ),

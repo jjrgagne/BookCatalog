@@ -9,12 +9,28 @@ import 'services/metadata_service.dart';
 
 /// Catalog operations that span several records (moves, returns, deletes
 /// that must update books, background lookups).
+/// Outcome of looking a book up and applying the details.
+enum LookupOutcome { updated, notFound, offline, skipped }
+
 class CatalogActions {
-  CatalogActions(this.repo, this.metadata, {this.userId});
+  CatalogActions(
+    this.repo,
+    this.metadata, {
+    this.userId,
+    Book? Function(String id)? currentBook,
+  }) : _currentBook = currentBook ?? ((_) => null);
 
   final CatalogRepository repo;
   final MetadataService metadata;
   final String? userId;
+
+  /// The latest stored version of a book, so details from a slow lookup are
+  /// applied on top of any edits made meanwhile (not over them).
+  final Book? Function(String id) _currentBook;
+
+  /// Books being looked up right now, shared by every caller so the same
+  /// book is never looked up twice at once.
+  static final _inFlight = <String>{};
 
   /// Creates a book from a scan. Without [details] the book is saved as
   /// pending and filled in later by [completePendingLookups].
@@ -56,24 +72,50 @@ class CatalogActions {
     metadataSource: details.source,
   );
 
-  /// Looks up every pending book. Returns how many were completed.
-  /// Books unknown to both services become manual so they stop retrying.
+  /// Looks [book] up and saves the details onto its latest version.
+  ///
+  /// With [onlyIfPending], nothing is changed if the book stopped being
+  /// pending meanwhile (e.g. the user typed the details in); a book no
+  /// source knows then becomes manual so it stops being retried.
+  Future<LookupOutcome> lookUpAndApply(
+    Book book, {
+    bool onlyIfPending = false,
+  }) async {
+    final isbn = book.isbn13;
+    if (isbn == null || !_inFlight.add(book.id)) return LookupOutcome.skipped;
+    try {
+      final details = await metadata.lookup(isbn);
+      final latest = _currentBook(book.id) ?? book;
+      if (onlyIfPending && latest.metadataSource != MetadataSource.pending) {
+        return LookupOutcome.skipped;
+      }
+      if (details == null) {
+        if (onlyIfPending) {
+          await repo.saveBook(
+            latest.copyWith(metadataSource: MetadataSource.manual),
+          );
+        }
+        return LookupOutcome.notFound;
+      }
+      await repo.saveBook(applyMetadata(latest, details));
+      return LookupOutcome.updated;
+    } on LookupUnavailableException {
+      return LookupOutcome.offline;
+    } finally {
+      _inFlight.remove(book.id);
+    }
+  }
+
+  /// Looks up every pending book. Returns how many were resolved (found or
+  /// confirmed unknown). Stops early when the services can't be reached.
   Future<int> completePendingLookups(List<Book> books) async {
     var done = 0;
     for (final book in books.where(
-      (b) => b.metadataSource == MetadataSource.pending && b.isbn13 != null,
+      (b) => b.metadataSource == MetadataSource.pending,
     )) {
-      try {
-        final details = await metadata.lookup(book.isbn13!);
-        await repo.saveBook(
-          details == null
-              ? book.copyWith(metadataSource: MetadataSource.manual)
-              : applyMetadata(book, details),
-        );
-        done++;
-      } on LookupUnavailableException {
-        break; // Still offline; try again later.
-      }
+      final outcome = await lookUpAndApply(book, onlyIfPending: true);
+      if (outcome == LookupOutcome.offline) break;
+      if (outcome != LookupOutcome.skipped) done++;
     }
     return done;
   }
