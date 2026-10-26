@@ -42,6 +42,19 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
     detectionSpeed: DetectionSpeed.normal,
   );
   bool _busy = false;
+
+  /// Full-screen colour flash: green = saved, amber = already in catalog.
+  Color? _flash;
+  Timer? _flashTimer;
+
+  void _flashScreen(Color color) {
+    _flashTimer?.cancel();
+    setState(() => _flash = color);
+    _flashTimer = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) setState(() => _flash = null);
+    });
+  }
+
   String? _lastIsbn;
   DateTime _lastAt = DateTime(2000);
   final List<_SessionEntry> _session = [];
@@ -62,6 +75,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
 
   @override
   void dispose() {
+    _flashTimer?.cancel();
     unawaited(_controller.dispose());
     super.dispose();
   }
@@ -102,6 +116,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
         final saved = await showScanResultSheet(context, isbn13: isbn13);
         if (saved != null) {
           _session.insert(0, _SessionEntry(saved.id, isbn13, 'Saved'));
+          if (mounted) _flashScreen(Colors.green);
         }
         if (mounted && widget.active) await _controller.start();
       }
@@ -123,6 +138,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
     await repo.saveBook(book);
     final entry = _SessionEntry(book.id, isbn13, 'Looking up…');
     setState(() => _session.insert(0, entry));
+    _flashScreen(Colors.green);
 
     unawaited(() async {
       try {
@@ -147,6 +163,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
     Book existing,
     String? currentLocationId,
   ) async {
+    _flashScreen(Colors.amber);
     await _controller.stop();
     if (!mounted) return;
     final locations = ref.read(locationMapProvider);
@@ -310,7 +327,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
     final notifier = ref.read(scanSettingsProvider.notifier);
     final theme = Theme.of(context);
 
-    return Scaffold(
+    final scaffold = Scaffold(
       appBar: AppBar(title: const Text('Scan')),
       body: Column(
         children: [
@@ -509,6 +526,23 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
           ),
         ],
       ),
+    );
+
+    return Stack(
+      children: [
+        scaffold,
+        // Scan feedback flash over the whole screen; never blocks touches.
+        Positioned.fill(
+          child: IgnorePointer(
+            child: AnimatedContainer(
+              duration: Duration(milliseconds: _flash == null ? 400 : 80),
+              color: (_flash ?? Colors.transparent).withValues(
+                alpha: _flash == null ? 0 : 0.55,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

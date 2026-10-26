@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "718401821265",
+    "project_id": "bookcatalog-101fd",
+    "storage_bucket": "bookcatalog-101fd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:718401821265:android:0ab4c3ad77cfa99e783670",
+        "android_client_info": {
+          "package_name": "io.github.jjrgagne.bookcatalog"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "718401821265-p97l3305b7cmu69g68pfhejuee4f9tbu.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "io.github.jjrgagne.bookcatalog",
+            "certificate_hash": "2326b440ae9f4c85bb865b9581da0c05c021c311"
+          }
+        },
+        {
+          "client_id": "718401821265-0a3lmfses78iarfdctnl2nteb1gomq35.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDTjdaH5OT5-43QCUOZ0yvd940ccVuhENw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "718401821265-0a3lmfses78iarfdctnl2nteb1gomq35.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -49,7 +49,13 @@ After Android Studio is installed:
 
 Day-to-day: `flutter run` (hot reload with `r`), `flutter test`, `flutter analyze`.
 
-## 2. Firebase project (one-time, done in the browser by the owner)
+## 2. Firebase project
+
+**Status: done.** Project `bookcatalog-101fd` (owner jjrgagne@gmail.com):
+Firestore `(default)` in `nam5`, Android app
+`1:718401821265:android:0ab4c3ad77cfa99e783670` with the test-key fingerprints,
+Google sign-in enabled, rules deployed, `android/app/google-services.json`
+committed. The steps below are kept for reference (e.g. a new project).
 
 1. <https://console.firebase.google.com> → **Add project** → name `BookCatalog`
    (Google Analytics not needed).
